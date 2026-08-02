@@ -1,0 +1,3 @@
+# TRAE 签到定时任务
+# 每天早上 8:00 执行签到，结果追加到 signin.log
+0 8 * * * cd /workspace/trae-signin && bash signin.sh >> signin.log 2>&1

@@ -1,0 +1,13 @@
+# 凭证文件（含 token）
+auths/
+
+# 编译产物
+signin_bin
+scheduler
+
+# 日志
+*.log
+
+# IDE
+.idea/
+.vscode/

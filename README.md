@@ -54,13 +54,28 @@ export BARK_URL="https://api.day.app/你的Key"
 
 ## 定时签到
 
-### 方式一：内置调度器
+### 方式一：GitHub Actions（推荐）
 
-```bash
-go build -o scheduler ./cmd/scheduler
-./scheduler &
-# → 每天 08:00 自动签到
-```
+最稳定的方案，不依赖本地环境，GitHub 服务器每天自动触发。
+
+**配置步骤：**
+
+1. Fork 或推送本仓库到你的 GitHub
+
+2. 在仓库 Settings → Secrets and variables → Actions 中添加以下 Secrets：
+
+   | Secret 名称 | 值 | 说明 |
+   |---|---|---|
+   | `TRAE_AUTH_1` | 账号1 的完整凭证 JSON | `auths/trae-*.json` 的文件内容 |
+   | `TRAE_AUTH_2` | 账号2 的完整凭证 JSON | 同上，多个账号依次添加 |
+   | `BARK_URL` | `https://api.day.app/你的Key` | Bark 推送地址 |
+
+3. 每天北京时间 08:00 自动执行，也可在 Actions 页面手动触发
+
+> 凭证 JSON 格式（登录后从 `auths/trae-*.json` 复制）：
+> ```json
+> {"account":{"uid":"...","nickname":"..."},"auth":{"accessToken":"...","refreshToken":"...","expiresAt":1786858238,...}}
+> ```
 
 ### 方式二：Crontab
 
@@ -69,6 +84,14 @@ go build -o scheduler ./cmd/scheduler
 crontab -e
 # 添加：
 0 8 * * * cd /path/to/trae-signin && bash signin.sh >> signin.log 2>&1
+```
+
+### 方式三：内置调度器
+
+```bash
+go build -o scheduler ./cmd/scheduler
+./scheduler &
+# → 每天 08:00 自动签到
 ```
 
 ## 目录结构

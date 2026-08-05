@@ -1,0 +1,64 @@
+name: TRAE 每日签到
+
+on:
+  schedule:
+    # 每天 00:00 UTC = 08:00 北京时间
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: 编译签到工具
+        run: go build -o signin_bin ./cmd/signin
+
+      - name: 生成凭证文件
+        run: |
+          mkdir -p auths
+          # 账号1
+          echo '${{ secrets.TRAE_AUTH_1 }}' > auths/trae-1.json
+          # 账号2
+          echo '${{ secrets.TRAE_AUTH_2 }}' > auths/trae-2.json
+          # 如需更多账号，添加更多 TRAE_AUTH_N
+
+      - name: 执行签到
+        run: |
+          OUTPUT=$(./signin_bin auths 2>&1)
+          echo "$OUTPUT"
+          echo "SIGNIN_OUTPUT<<EOF" >> $GITHUB_ENV
+          echo "$OUTPUT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: 提取结果
+        id: result
+        run: |
+          echo "$SIGNIN_OUTPUT" | grep -oP '总计=\K\d+' | head -1 | xargs -I{} echo "total={}" >> $GITHUB_OUTPUT || echo "total=?" >> $GITHUB_OUTPUT
+          echo "$SIGNIN_OUTPUT" | grep -oP '签到成功=\K\d+' | head -1 | xargs -I{} echo "ok={}" >> $GITHUB_OUTPUT || echo "ok=?" >> $GITHUB_OUTPUT
+          echo "$SIGNIN_OUTPUT" | grep -oP '已签=\K\d+' | head -1 | xargs -I{} echo "already={}" >> $GITHUB_OUTPUT || echo "already=?" >> $GITHUB_OUTPUT
+          echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' | head -1 | xargs -I{} echo "fail={}" >> $GITHUB_OUTPUT || echo "fail=?" >> $GITHUB_OUTPUT
+
+      - name: Bark 通知
+        if: always()
+        run: |
+          TITLE="✅ TRAE签到"
+          if [ "${{ steps.result.outputs.fail }}" -gt 0 ] 2>/dev/null; then
+            TITLE="⚠️ TRAE签到异常"
+          fi
+          BODY="总计${{ steps.result.outputs.total }} 成功${{ steps.result.outputs.ok }} 已签${{ steps.result.outputs.already }} 失败${{ steps.result.outputs.fail }}"
+          # URL 编码
+          TITLE_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))")
+          BODY_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BODY'))")
+          curl -s -X POST "${{ secrets.BARK_URL }}/${TITLE_ENC}/${BODY_ENC}" || true
+
+      - name: 清理凭证
+        if: always()
+        run: rm -rf auths

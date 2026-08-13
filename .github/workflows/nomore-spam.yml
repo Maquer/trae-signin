@@ -20,4 +20,4 @@ jobs:
       - name: Detect and close spam
         uses: JohnsonRan/nomore-spam@main
         with:
-          github-token: $\{\{ github.token \}\}
+          github-token: ${{ github.token }}

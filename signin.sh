@@ -3,7 +3,12 @@
 set -e
 cd "$(dirname "$0")"
 
-BARK_URL="${BARK_URL:-https://api.day.app/Av8DkzMpStcsmsW3KfqEMc}"
+# Bark 推送地址：运行前请自行 export BARK_URL='https://api.day.app/你的Key'
+# 注意：不要将真实 Bark key 硬编码进仓库。GitHub Actions 通过 secrets.BARK_URL 注入。
+BARK_URL="${BARK_URL:-}"
+if [ -z "$BARK_URL" ]; then
+  echo "⚠️ 未设置 BARK_URL，跳过 Bark 推送。本地运行可先: export BARK_URL='https://api.day.app/你的Key'"
+fi
 
 go build -o signin_bin ./cmd/signin
 
@@ -48,6 +53,9 @@ fi
 BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL}\n${ACCOUNTS}"
 
 # 发送 Bark 通知
-curl -s -X POST "$BARK_URL/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))")/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BODY'))")" > /dev/null 2>&1 || true
-
-echo "📲 Bark 通知已发送"
+if [ -n "$BARK_URL" ]; then
+  curl -s -X POST "$BARK_URL/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))")/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BODY'))")" > /dev/null 2>&1 || true
+  echo "📲 Bark 通知已发送"
+else
+  echo "📲 未配置 BARK_URL，跳过 Bark 推送"
+fi

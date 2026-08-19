@@ -92,7 +92,7 @@ func main() {
 			r.detail = "今日已签到"
 			alreadyN++
 		case !enable:
-		=r.status = "DISABLED"
+			r.status = "DISABLED"
 			r.detail = "签到已禁用"
 			disabledN++
 		default:

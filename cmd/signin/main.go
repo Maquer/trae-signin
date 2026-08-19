@@ -39,7 +39,7 @@ func main() {
 	up := upstream.New()
 
 	var rows []row
-	okN, alreadyN, failN := 0, 0, 0
+	okN, alreadyN, failN, disabledN := 0, 0, 0, 0
 
 	for _, f := range files {
 		r := row{file: filepath.Base(f)}
@@ -92,9 +92,9 @@ func main() {
 			r.detail = "今日已签到"
 			alreadyN++
 		case !enable:
-			r.status = "FAIL"
+		=r.status = "DISABLED"
 			r.detail = "签到已禁用"
-			failN++
+			disabledN++
 		default:
 			if err := up.CheckinClaim(a); err != nil {
 				r.status = "FAIL"
@@ -128,7 +128,7 @@ func main() {
 	}
 	fmt.Println("└──────────────────────────────────────┴───────────────┴──────────────┴──────────┴──────────────────────────────────────┘")
 	fmt.Println()
-	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  失败=%d\n", len(rows), okN, alreadyN, failN)
+	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  禁用=%d  失败=%d\n", len(rows), okN, alreadyN, disabledN, failN)
 }
 
 func isAlready(msg string) bool {

@@ -167,13 +167,25 @@ func (c *Client) UserEntUsage(a *auth.Auth) (remain int64, err error) {
 					CreditsLimit int64 `json:"credits_limit"`
 				} `json:"quota"`
 			} `json:"entitlement_base_info"`
+			// usage.credits_amount 是已用积分，remain = limit - used
+			Usage struct {
+				CreditsAmount float64 `json:"credits_amount"`
+			} `json:"usage"`
 		} `json:"user_entitlement_pack_list"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return 0, fmt.Errorf("ent usage parse: %w", err)
 	}
 	for _, p := range resp.UserEntitlementPackList {
-		remain += p.EntitlementBaseInfo.Quota.CreditsLimit
+		l := p.EntitlementBaseInfo.Quota.CreditsLimit
+		if l <= 0 {
+			continue
+		}
+		used := int64(p.Usage.CreditsAmount)
+		if used < 0 {
+			used = 0
+		}
+		remain += l - used
 	}
 	return remain, nil
 }
@@ -191,8 +203,10 @@ func ugHeaders(req *http.Request, a *auth.Auth) {
 
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) > n {
-		return s[:n]
+	// 按 rune 截断，避免切断 UTF-8 多字节字符导致非法输出
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
 	}
 	return s
 }

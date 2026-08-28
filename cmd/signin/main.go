@@ -70,8 +70,11 @@ func main() {
 				failN++
 				continue
 			}
-			_ = a.SaveAtomic()
-			fmt.Printf("   ✅ token 刷新成功\n")
+			if err := a.SaveAtomic(); err != nil {
+				fmt.Printf("   ⚠️ 凭证保存失败: %v\n", err)
+			} else {
+				fmt.Printf("   ✅ token 刷新成功\n")
+			}
 		}
 
 		// 签到
@@ -139,16 +142,19 @@ func isAlready(msg string) bool {
 }
 
 func trunc(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	// 按 rune 截断，避免切断 UTF-8 中文导致输出乱码/非法字节
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
 	}
 	return s
 }
 
 func short(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 60 {
-		return s[:60]
+	r := []rune(s)
+	if len(r) > 60 {
+		return string(r[:60])
 	}
 	return s
 }

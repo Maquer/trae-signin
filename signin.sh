@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # signin.sh — TRAE 批量签到脚本，签到后通过 Bark 推送通知
-set -e
+# 兼容 Linux / macOS / Windows(Git Bash)
+set -u
+
 cd "$(dirname "$0")"
 
 # Bark 推送地址：运行前请自行 export BARK_URL='https://api.day.app/你的Key'
@@ -12,50 +14,90 @@ fi
 
 go build -o signin_bin ./cmd/signin
 
-# 执行签到并捕获输出
-SIGNIN_OUTPUT=$(./signin_bin "${1:-auths}" 2>&1)
-SIGNIN_EXIT=$?
+# Windows 上 Go 编译产物会带 .exe 后缀
+BIN="./signin_bin"
+if [ ! -x "$BIN" ] && [ -x "$BIN.exe" ]; then
+  BIN="$BIN.exe"
+fi
 
+# 捕获输出与退出码（不退出，保证后面能正常发 Bark）
+SIGNIN_OUTPUT="$("$BIN" "${1:-auths}" 2>&1)"
+SIGNIN_EXIT=$?
 echo "$SIGNIN_OUTPUT"
 
-# 提取关键信息用于 Bark 推送
-TOTAL=$(echo "$SIGNIN_OUTPUT" | grep -oP '总计=\K\d+' || echo "?")
-OK=$(echo "$SIGNIN_OUTPUT" | grep -oP '签到成功=\K\d+' || echo "?")
-ALREADY=$(echo "$SIGNIN_OUTPUT" | grep -oP '已签=\K\d+' || echo "?")
-FAIL=$(echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' || echo "?")
+# 提取汇总数据（避免 GNU 专属 grep -oP）
+TOTAL="?"; OK="?"; ALREADY="?"; FAIL="?"
+if [[ "$SIGNIN_OUTPUT" =~ 总计=([0-9]+) ]]; then TOTAL="${BASH_REMATCH[1]}"; fi
+if [[ "$SIGNIN_OUTPUT" =~ 签到成功=([0-9]+) ]]; then OK="${BASH_REMATCH[1]}"; fi
+if [[ "$SIGNIN_OUTPUT" =~ 已签=([0-9]+) ]]; then ALREADY="${BASH_REMATCH[1]}"; fi
+if [[ "$SIGNIN_OUTPUT" =~ 失败=([0-9]+) ]]; then FAIL="${BASH_REMATCH[1]}"; fi
 
-# 提取每个账号的信息
+# 提取每个账号信息（数据行以 │ 开头，第2列为数字 UID）
 ACCOUNTS=""
 while IFS= read -r line; do
-    if echo "$line" | grep -qP '│\s+\d+'; then
-        uid=$(echo "$line" | sed 's/│/\n/g' | sed -n '2p' | xargs)
-        nick=$(echo "$line" | sed 's/│/\n/g' | sed -n '3p' | xargs)
-        status=$(echo "$line" | sed 's/│/\n/g' | sed -n '4p' | xargs)
-        credits=$(echo "$line" | sed 's/│/\n/g' | sed -n '5p' | xargs)
+  case "$line" in
+    \│*)
+      # 用 SOH 分隔，避免多字节字符在 tr/sed 下的移植性问题
+      line2="${line//│/$'\x01'}"
+      IFS=$'\x01' read -r -a fields <<< "$line2"
+      uid="${fields[1]}"; nick="${fields[2]}"; status="${fields[3]}"; credits="${fields[4]}"
+      uid="$(echo "$uid" | xargs)"; nick="$(echo "$nick" | xargs)"
+      status="$(echo "$status" | xargs)"; credits="$(echo "$credits" | xargs)"
+      if [[ "$uid" =~ ^[0-9]+$ ]]; then
         ACCOUNTS="${ACCOUNTS}${nick} ${status} 积分${credits}\n"
-    fi
+      fi
+      ;;
+  esac
 done <<< "$SIGNIN_OUTPUT"
+
+# 纯 bash URL 编码（UTF-8 按字节编码），作为无 python3 时的回退
+urlencode() {
+  local s="$1" i c o=""
+  LC_ALL=C
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [a-zA-Z0-9_.~-]) o+="$c" ;;
+      *) o+="$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$o"
+}
+
+encode() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1" 2>/dev/null || urlencode "$1"
+  else
+    urlencode "$1"
+  fi
+}
 
 # 构建 Bark 推送内容
 TITLE="TRAE 签到"
 if [ "$SIGNIN_EXIT" -eq 0 ]; then
-    if [ "$OK" -gt 0 ] 2>/dev/null; then
-        TITLE="✅ TRAE 签到成功"
-    elif [ "$FAIL" -gt 0 ] 2>/dev/null; then
-        TITLE="⚠️ TRAE 签到异常"
-    else
-        TITLE="📌 TRAE 已签到"
-    fi
+  if [ "${OK:-0}" -gt 0 ] 2>/dev/null; then
+    TITLE="✅ TRAE 签到成功"
+  elif [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
+    TITLE="⚠️ TRAE 签到异常"
+  else
+    TITLE="📌 TRAE 已签到"
+  fi
 else
-    TITLE="❌ TRAE 签到失败"
+  TITLE="❌ TRAE 签到失败"
 fi
 
 BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL}\n${ACCOUNTS}"
 
 # 发送 Bark 通知
 if [ -n "$BARK_URL" ]; then
-  curl -s -X POST "$BARK_URL/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))")/$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BODY'))")" > /dev/null 2>&1 || true
-  echo "📲 Bark 通知已发送"
+  TITLE_ENC="$(encode "$TITLE")"
+  BODY_ENC="$(encode "$BODY")"
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -X POST "${BARK_URL}/${TITLE_ENC}/${BODY_ENC}" > /dev/null 2>&1 || true
+    echo "📲 Bark 通知已发送"
+  else
+    echo "⚠️ 未找到 curl，无法发送 Bark 通知"
+  fi
 else
   echo "📲 未配置 BARK_URL，跳过 Bark 推送"
 fi

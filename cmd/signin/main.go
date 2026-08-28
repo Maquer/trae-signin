@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +33,11 @@ func main() {
 	files, err := filepath.Glob(filepath.Join(dir, "trae-*.json"))
 	if err != nil || len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "❌ 在 %s 中没有找到 trae-*.json 凭证文件\n", dir)
-		fmt.Fprintf(os.Stderr, "   请先运行 login.sh 登录账号\n")
+		if runtime.GOOS == "windows" {
+			fmt.Fprintf(os.Stderr, "   请先运行 login.ps1 登录账号\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "   请先运行 login.sh 登录账号\n")
+		}
 		os.Exit(1)
 	}
 	sort.Strings(files)

@@ -240,7 +240,12 @@ except Exception as e:
 try:
     ent = post("/trae/api/v2/pay/ide_user_ent_usage")
     packs = ent.get("user_entitlement_pack_list") or []
-    total = sum(p.get("entitlement_base_info", {}).get("quota", {}).get("credits_limit", 0) for p in packs)
+    total = 0
+    for p in packs:
+        limit = (p.get("entitlement_base_info") or {}).get("quota", {}).get("credits_limit", 0)
+        if limit > 0:
+            used = (p.get("usage") or {}).get("credits_amount", 0) or 0
+            total += int(limit) - int(used)
     print(f"当前积分: {total}")
 except Exception as e:
     print(f"查积分: {e}")

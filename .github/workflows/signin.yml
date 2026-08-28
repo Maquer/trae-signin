@@ -27,26 +27,44 @@ jobs:
         run: go build -o signin_bin ./cmd/signin
 
       # 只写入已配置的 Secret，未配置的账号自动跳过，避免生成空凭证文件导致误报失败。
-      # 使用单引号包裹，避免 JSON 中的双引号破坏 shell 语法。
+      # 通过 env 注入 secret，避免 JSON 中的单引号破坏 shell 语法。
+      # 未配置任何账号时输出 no_accounts=true，后续步骤跳过签到并给出明确提示。
       - name: 生成凭证文件
+        id: gen
+        env:
+          AUTH_1: ${{ secrets.TRAE_AUTH_1 }}
+          AUTH_2: ${{ secrets.TRAE_AUTH_2 }}
+          AUTH_3: ${{ secrets.TRAE_AUTH_3 }}
         run: |
           set -e
           mkdir -p auths
-          if [ -n '${{ secrets.TRAE_AUTH_1 }}' ]; then
-            printf '%s' '${{ secrets.TRAE_AUTH_1 }}' > auths/trae-1.json
+          COUNT=0
+          if [ -n "$AUTH_1" ]; then
+            printf '%s' "$AUTH_1" > auths/trae-1.json
+            COUNT=$((COUNT+1))
           fi
-          if [ -n '${{ secrets.TRAE_AUTH_2 }}' ]; then
-            printf '%s' '${{ secrets.TRAE_AUTH_2 }}' > auths/trae-2.json
+          if [ -n "$AUTH_2" ]; then
+            printf '%s' "$AUTH_2" > auths/trae-2.json
+            COUNT=$((COUNT+1))
           fi
-          if [ -n '${{ secrets.TRAE_AUTH_3 }}' ]; then
-            printf '%s' '${{ secrets.TRAE_AUTH_3 }}' > auths/trae-3.json
+          if [ -n "$AUTH_3" ]; then
+            printf '%s' "$AUTH_3" > auths/trae-3.json
+            COUNT=$((COUNT+1))
           fi
           # 如需更多账号，继续添加 TRAE_AUTH_N 对应的判断
-          echo "已生成凭证文件："
-          ls -la auths
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::未配置任何账号 Secret（TRAE_AUTH_1/2/3），已跳过签到"
+            echo "no_accounts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_accounts=false" >> "$GITHUB_OUTPUT"
+            echo "已生成凭证文件："
+            ls -la auths
+          fi
 
       - name: 执行签到
-        # continue-on-error：即使签到失败（如没有凭证、token 失效），
+        # 未配置任何账号时跳过签到，避免无意义的失败日志
+        if: steps.gen.outputs.no_accounts != 'true'
+        # continue-on-error：即使签到失败（如 token 失效），
         # 也继续执行提取结果 / Bark 通知；退出码会如实记录在日志中
         continue-on-error: true
         run: |
@@ -62,6 +80,7 @@ jobs:
 
       - name: 提取结果
         id: result
+        if: steps.gen.outputs.no_accounts != 'true'
         run: |
           TOTAL=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '总计=[0-9]+' | grep -oE '[0-9]+' | head -1)
           OK=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '签到成功=[0-9]+' | grep -oE '[0-9]+' | head -1)
@@ -76,6 +95,7 @@ jobs:
         if: always()
         env:
           BARK_URL: ${{ secrets.BARK_URL }}
+          NO_ACCOUNTS: ${{ steps.gen.outputs.no_accounts }}
           TOTAL: ${{ steps.result.outputs.total }}
           OK: ${{ steps.result.outputs.ok }}
           ALREADY: ${{ steps.result.outputs.already }}
@@ -86,11 +106,17 @@ jobs:
             echo "未配置 BARK_URL，跳过 Bark 推送"
             exit 0
           fi
-          TITLE="✅ TRAE 签到"
-          if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
-            TITLE="⚠️ TRAE 签到异常"
+          # 未配置账号时推送明确提示，避免发送无意义的“0 成功”通知
+          if [ "$NO_ACCOUNTS" = "true" ]; then
+            TITLE="⚠️ TRAE 未配置账号"
+            BODY="请到仓库 Settings → Secrets and variables → Actions 配置 TRAE_AUTH_1/2/3 后重试"
+          else
+            TITLE="✅ TRAE 签到"
+            if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
+              TITLE="⚠️ TRAE 签到异常"
+            fi
+            BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?}"
           fi
-          BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?}"
           TITLE_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$TITLE")
           BODY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$BODY")
           # --max-time 防止网络异常时 curl 永久挂起

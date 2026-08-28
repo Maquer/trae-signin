@@ -8,11 +8,28 @@ cd "$(dirname "$0")"
 # Bark 推送地址：运行前请自行 export BARK_URL='https://api.day.app/你的Key'
 # 注意：不要将真实 Bark key 硬编码进仓库。GitHub Actions 通过 secrets.BARK_URL 注入。
 BARK_URL="${BARK_URL:-}"
+BARK_URL="${BARK_URL%/}"  # 去掉末尾斜杠，避免生成 //title/body 双重斜杠
 if [ -z "$BARK_URL" ]; then
   echo "⚠️ 未设置 BARK_URL，跳过 Bark 推送。本地运行可先: export BARK_URL='https://api.day.app/你的Key'"
 fi
 
-go build -o signin_bin ./cmd/signin
+# 编译签到工具；未安装 Go 时回退到已有编译产物
+if command -v go >/dev/null 2>&1; then
+  if ! go build -o signin_bin ./cmd/signin; then
+    if [ -x "./signin_bin" ] || [ -x "./signin_bin.exe" ]; then
+      echo "⚠️ 编译失败，使用现有编译产物 signin_bin"
+    else
+      echo "❌ 编译失败且无可用编译产物"
+      exit 1
+    fi
+  fi
+elif [ -x "./signin_bin" ] || [ -x "./signin_bin.exe" ]; then
+  echo "⚠️ 未检测到 Go 环境，使用现有编译产物 signin_bin"
+else
+  echo "❌ 未检测到 Go 环境，且没有可用的 signin_bin 编译产物"
+  echo "   请安装 Go 后重试，或运行 login.sh / login.ps1 完成登录"
+  exit 1
+fi
 
 # Windows 上 Go 编译产物会带 .exe 后缀
 BIN="./signin_bin"
@@ -44,7 +61,7 @@ while IFS= read -r line; do
       uid="$(echo "$uid" | xargs)"; nick="$(echo "$nick" | xargs)"
       status="$(echo "$status" | xargs)"; credits="$(echo "$credits" | xargs)"
       if [[ "$uid" =~ ^[0-9]+$ ]]; then
-        ACCOUNTS="${ACCOUNTS}${nick} ${status} 积分${credits}\n"
+        ACCOUNTS="${ACCOUNTS}${nick} ${status} 积分${credits}"$'\n'
       fi
       ;;
   esac
@@ -53,7 +70,8 @@ done <<< "$SIGNIN_OUTPUT"
 # 纯 bash URL 编码（UTF-8 按字节编码），作为无 python3 时的回退
 urlencode() {
   local s="$1" i c o=""
-  LC_ALL=C
+  # local 使 LC_ALL 只在函数内生效，避免污染后续命令的 UTF-8 环境
+  local LC_ALL=C
   for ((i = 0; i < ${#s}; i++)); do
     c="${s:i:1}"
     case "$c" in
@@ -86,7 +104,7 @@ else
   TITLE="❌ TRAE 签到失败"
 fi
 
-BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL}\n${ACCOUNTS}"
+BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL}"$'\n'"${ACCOUNTS}"
 
 # 发送 Bark 通知
 if [ -n "$BARK_URL" ]; then

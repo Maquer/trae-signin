@@ -6,9 +6,14 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch: # 支持手动触发
 
+permissions:
+  contents: read
+
 jobs:
   signin:
     runs-on: ubuntu-latest
+    # 防止某个步骤意外挂起时长期占用 runner（GitHub 默认上限 6h）
+    timeout-minutes: 30
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -21,43 +26,75 @@ jobs:
       - name: 编译签到工具
         run: go build -o signin_bin ./cmd/signin
 
+      # 只写入已配置的 Secret，未配置的账号自动跳过，避免生成空凭证文件导致误报失败。
+      # 使用单引号包裹，避免 JSON 中的双引号破坏 shell 语法。
       - name: 生成凭证文件
         run: |
+          set -e
           mkdir -p auths
-          # 账号1
-          echo '${{ secrets.TRAE_AUTH_1 }}' > auths/trae-1.json
-          # 账号2
-          echo '${{ secrets.TRAE_AUTH_2 }}' > auths/trae-2.json
-          # 如需更多账号，添加更多 TRAE_AUTH_N
+          if [ -n '${{ secrets.TRAE_AUTH_1 }}' ]; then
+            printf '%s' '${{ secrets.TRAE_AUTH_1 }}' > auths/trae-1.json
+          fi
+          if [ -n '${{ secrets.TRAE_AUTH_2 }}' ]; then
+            printf '%s' '${{ secrets.TRAE_AUTH_2 }}' > auths/trae-2.json
+          fi
+          if [ -n '${{ secrets.TRAE_AUTH_3 }}' ]; then
+            printf '%s' '${{ secrets.TRAE_AUTH_3 }}' > auths/trae-3.json
+          fi
+          # 如需更多账号，继续添加 TRAE_AUTH_N 对应的判断
+          echo "已生成凭证文件："
+          ls -la auths
 
       - name: 执行签到
+        # continue-on-error：即使签到失败（如没有凭证、token 失效），
+        # 也继续执行提取结果 / Bark 通知；退出码会如实记录在日志中
+        continue-on-error: true
         run: |
+          set +e
           OUTPUT=$(./signin_bin auths 2>&1)
+          EXIT_CODE=$?
+          set -e
           echo "$OUTPUT"
-          echo "SIGNIN_OUTPUT<<EOF" >> $GITHUB_ENV
-          echo "$OUTPUT" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          echo "SIGNIN_OUTPUT<<EOF" >> "$GITHUB_ENV"
+          echo "$OUTPUT" >> "$GITHUB_ENV"
+          echo "EOF" >> "$GITHUB_ENV"
+          exit "$EXIT_CODE"
 
       - name: 提取结果
         id: result
         run: |
-          echo "$SIGNIN_OUTPUT" | grep -oP '总计=\K\d+' | head -1 | xargs -I{} echo "total={}" >> $GITHUB_OUTPUT || echo "total=?" >> $GITHUB_OUTPUT
-          echo "$SIGNIN_OUTPUT" | grep -oP '签到成功=\K\d+' | head -1 | xargs -I{} echo "ok={}" >> $GITHUB_OUTPUT || echo "ok=?" >> $GITHUB_OUTPUT
-          echo "$SIGNIN_OUTPUT" | grep -oP '已签=\K\d+' | head -1 | xargs -I{} echo "already={}" >> $GITHUB_OUTPUT || echo "already=?" >> $GITHUB_OUTPUT
-          echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' | head -1 | xargs -I{} echo "fail={}" >> $GITHUB_OUTPUT || echo "fail=?" >> $GITHUB_OUTPUT
+          TOTAL=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '总计=[0-9]+' | grep -oE '[0-9]+' | head -1)
+          OK=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '签到成功=[0-9]+' | grep -oE '[0-9]+' | head -1)
+          ALREADY=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '已签=[0-9]+' | grep -oE '[0-9]+' | head -1)
+          FAIL=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '失败=[0-9]+' | grep -oE '[0-9]+' | head -1)
+          echo "total=${TOTAL:-?}" >> "$GITHUB_OUTPUT"
+          echo "ok=${OK:-?}" >> "$GITHUB_OUTPUT"
+          echo "already=${ALREADY:-?}" >> "$GITHUB_OUTPUT"
+          echo "fail=${FAIL:-?}" >> "$GITHUB_OUTPUT"
 
       - name: Bark 通知
         if: always()
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+          TOTAL: ${{ steps.result.outputs.total }}
+          OK: ${{ steps.result.outputs.ok }}
+          ALREADY: ${{ steps.result.outputs.already }}
+          FAIL: ${{ steps.result.outputs.fail }}
         run: |
-          TITLE="✅ TRAE签到"
-          if [ "${{ steps.result.outputs.fail }}" -gt 0 ] 2>/dev/null; then
-            TITLE="⚠️ TRAE签到异常"
+          set -e
+          if [ -z "$BARK_URL" ]; then
+            echo "未配置 BARK_URL，跳过 Bark 推送"
+            exit 0
           fi
-          BODY="总计${{ steps.result.outputs.total }} 成功${{ steps.result.outputs.ok }} 已签${{ steps.result.outputs.already }} 失败${{ steps.result.outputs.fail }}"
-          # URL 编码
-          TITLE_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TITLE'))")
-          BODY_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BODY'))")
-          curl -s -X POST "${{ secrets.BARK_URL }}/${TITLE_ENC}/${BODY_ENC}" || true
+          TITLE="✅ TRAE 签到"
+          if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
+            TITLE="⚠️ TRAE 签到异常"
+          fi
+          BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?}"
+          TITLE_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$TITLE")
+          BODY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$BODY")
+          # --max-time 防止网络异常时 curl 永久挂起
+          curl -s --max-time 15 -X POST "${BARK_URL}/${TITLE_ENC}/${BODY_ENC}" || true
 
       - name: 清理凭证
         if: always()

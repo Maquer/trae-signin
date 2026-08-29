@@ -10,8 +10,28 @@ API_HOST="https://api.trae.com.cn"
 
 mkdir -p "$AUTH_DIR"
 
+# 设备 ID：优先读取本机 TRAE SOLO CN 的绑定设备 ID（签到按设备校验，
+# 若用随机 deviceId 会导致签到被服务端拒绝）。未找到时回退随机值。
+TRAE_ENV_FILE=""
+if [ -n "$APPDATA" ] && [ -f "$APPDATA/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+  TRAE_ENV_FILE="$APPDATA/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
+elif [ -f "$HOME/Library/Application Support/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+  TRAE_ENV_FILE="$HOME/Library/Application Support/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
+elif [ -f "$HOME/.config/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+  TRAE_ENV_FILE="$HOME/.config/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
+fi
+DEVICE_ID=""
+if [ -n "$TRAE_ENV_FILE" ] && command -v python3 >/dev/null 2>&1; then
+  DEVICE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["device_id"])' "$TRAE_ENV_FILE" 2>/dev/null)"
+fi
+if [ -z "$DEVICE_ID" ]; then
+  DEVICE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
+  echo "⚠️ 未找到本机 TRAE SOLO CN 设备 ID（local_env.json），使用随机 deviceId；签到按设备绑定，随机 ID 可能导致签到被拒" >&2
+else
+  echo "已使用本机 TRAE SOLO CN 设备 ID: $DEVICE_ID"
+fi
+
 MACHINE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
-DEVICE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
 
 echo "============================================================"
 echo "  TRAE SOLO 登录 - 纯签到版"
@@ -215,38 +235,49 @@ print(f"已保存（{os.environ['ACTION']}）: {os.environ['AUTH_FILE']}")
 PYEOF
 
 # 自动签到 + 查积分
-TOKEN="$TOKEN" DEVICE_ID="$DEVICE_ID" python3 - <<'PYEOF'
-import json, os, urllib.request
+TOKEN="$TOKEN" DEVICE_ID="$DEVICE_ID" MACHINE_ID="$MACHINE_ID" python3 - <<'PYEOF'
+import json, os, time, urllib.request
 UG = "https://api.trae.cn"
 HDRS = {
     "Content-Type": "application/json",
     "Authorization": "Cloud-IDE-JWT " + os.environ["TOKEN"],
     "X-User-Region": "CN",
     "X-Device-Id": os.environ["DEVICE_ID"],
+    "X-Machine-Id": os.environ["MACHINE_ID"],
 }
-def post(path, body=b"{}"):
-    req = urllib.request.Request(UG + path, method="POST", data=body, headers=HDRS)
+def post(path, body=None):
+    data = json.dumps(body).encode() if body is not None else b"{}"
+    req = urllib.request.Request(UG + path, method="POST", data=data, headers=HDRS)
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode() or "{}")
 try:
     st = post("/trae/api/v2/ug/checkin_credits/status")
     if not st.get("checked_in") and st.get("enable"):
-        r = post("/trae/api/v2/ug/checkin_credits/claim")
-        print(f"签到: {r.get('message', 'success')}")
+        claim_body = {"device_id": os.environ["DEVICE_ID"], "machine_id": os.environ["MACHINE_ID"]}
+        r = post("/trae/api/v2/ug/checkin_credits/claim", claim_body)
+        code = r.get("code")
+        if code and code not in (0, 200):
+            print(f"签到被拒: {r.get('message', 'code %s' % code)}")
+        else:
+            print(f"签到: {r.get('message', 'success')}")
     else:
         print(f"签到状态: checked_in={st.get('checked_in')} enable={st.get('enable')}")
 except Exception as e:
     print(f"签到: {e}")
 try:
     ent = post("/trae/api/v2/pay/ide_user_ent_usage")
+    us = ent.get("usage_summary") or {}
     packs = ent.get("user_entitlement_pack_list") or []
-    total = 0
+    signin = 0
     for p in packs:
-        limit = (p.get("entitlement_base_info") or {}).get("quota", {}).get("credits_limit", 0)
-        if limit > 0:
-            used = (p.get("usage") or {}).get("credits_amount", 0) or 0
-            total += int(limit) - int(used)
-    print(f"当前积分: {total}")
+        name = ((p.get("entitlement_base_info") or {}).get("product_extra") or {}).get("package_extra", {}).get("package_name", "")
+        if name == "签到奖励":
+            signin += int((p.get("entitlement_base_info") or {}).get("quota", {}).get("credits_limit", 0))
+    if us.get("total_amount"):
+        remain = int(us.get("total_amount")) - int(us.get("consumed_amount", 0))
+        print(f"当前积分: 剩余{remain}（累计签到奖励{signin}）")
+    else:
+        print(f"当前积分: 累计签到奖励{signin}")
 except Exception as e:
     print(f"查积分: {e}")
 PYEOF

@@ -43,13 +43,16 @@ SIGNIN_EXIT=$?
 echo "$SIGNIN_OUTPUT"
 
 # 提取汇总数据（避免 GNU 专属 grep -oP）
-TOTAL="?"; OK="?"; ALREADY="?"; FAIL="?"
+TOTAL="?"; OK="?"; ALREADY="?"; FAIL="?"; SIGNIN="?"; REMAIN="?"
 if [[ "$SIGNIN_OUTPUT" =~ 总计=([0-9]+) ]]; then TOTAL="${BASH_REMATCH[1]}"; fi
 if [[ "$SIGNIN_OUTPUT" =~ 签到成功=([0-9]+) ]]; then OK="${BASH_REMATCH[1]}"; fi
 if [[ "$SIGNIN_OUTPUT" =~ 已签=([0-9]+) ]]; then ALREADY="${BASH_REMATCH[1]}"; fi
 if [[ "$SIGNIN_OUTPUT" =~ 失败=([0-9]+) ]]; then FAIL="${BASH_REMATCH[1]}"; fi
+if [[ "$SIGNIN_OUTPUT" =~ 累计签到奖励=([0-9]+) ]]; then SIGNIN="${BASH_REMATCH[1]}"; fi
+if [[ "$SIGNIN_OUTPUT" =~ 总剩余=([0-9]+) ]]; then REMAIN="${BASH_REMATCH[1]}"; fi
 
 # 提取每个账号信息（数据行以 │ 开头，第2列为数字 UID）
+# 表头列序：UID | 昵称 | 状态 | 签到奖励 | 总剩余 | 详情
 ACCOUNTS=""
 while IFS= read -r line; do
   case "$line" in
@@ -57,11 +60,11 @@ while IFS= read -r line; do
       # 用 SOH 分隔，避免多字节字符在 tr/sed 下的移植性问题
       line2="${line//│/$'\x01'}"
       IFS=$'\x01' read -r -a fields <<< "$line2"
-      uid="${fields[1]}"; nick="${fields[2]}"; status="${fields[3]}"; credits="${fields[4]}"
+      uid="${fields[1]}"; nick="${fields[2]}"; status="${fields[3]}"; signin="${fields[4]}"; remain="${fields[5]}"
       uid="$(echo "$uid" | xargs)"; nick="$(echo "$nick" | xargs)"
-      status="$(echo "$status" | xargs)"; credits="$(echo "$credits" | xargs)"
+      status="$(echo "$status" | xargs)"; signin="$(echo "$signin" | xargs)"; remain="$(echo "$remain" | xargs)"
       if [[ "$uid" =~ ^[0-9]+$ ]]; then
-        ACCOUNTS="${ACCOUNTS}${nick} ${status} 积分${credits}"$'\n'
+        ACCOUNTS="${ACCOUNTS}${nick} ${status} 签到${signin} 剩余${remain}"$'\n'
       fi
       ;;
   esac
@@ -104,7 +107,7 @@ else
   TITLE="❌ TRAE 签到失败"
 fi
 
-BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL}"$'\n'"${ACCOUNTS}"
+BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 失败${FAIL} | 签到奖励${SIGNIN} | 总剩余${REMAIN}"$'\n'"${ACCOUNTS}"
 
 # 发送 Bark 通知
 if [ -n "$BARK_URL" ]; then

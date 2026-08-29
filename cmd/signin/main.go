@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"trae-signin/internal/auth"
@@ -16,16 +17,25 @@ import (
 )
 
 type row struct {
-	file   string
-	uid    string
-	nick   string
-	status string
-	detail string
-	remain int64
-	hasRem bool
+	file    string
+	uid     string
+	nick    string
+	status  string
+	detail  string
+	remain  int64
+	signin  int64
+	hasRem  bool
+	hasSign bool
 }
 
 func main() {
+	// Windows 控制台默认 GBK 代码页，改为 UTF-8 避免中文乱码
+	if runtime.GOOS == "windows" {
+		mod := syscall.NewLazyDLL("kernel32.dll")
+		proc := mod.NewProc("SetConsoleOutputCP")
+		proc.Call(65001)
+	}
+
 	dir := "auths"
 	if len(os.Args) > 1 {
 		dir = os.Args[1]
@@ -104,7 +114,7 @@ func main() {
 			r.detail = "签到已禁用"
 			disabledN++
 		default:
-			if err := up.CheckinClaim(a); err != nil {
+			if err := claimWithRetry(up, a); err != nil {
 				r.status = "FAIL"
 				r.detail = short(err.Error())
 				failN++
@@ -115,28 +125,37 @@ func main() {
 		}
 
 		// 查积分
-		if remain, qerr := up.UserEntUsage(a); qerr == nil {
-			r.remain, r.hasRem = remain, true
+		if u, qerr := up.UserEntUsage(a); qerr == nil {
+			r.remain, r.hasRem = u.Remain, true
+			r.signin, r.hasSign = u.Signin, true
 		}
 		rows = append(rows, r)
 	}
 
 	// 报告
 	fmt.Println()
-	fmt.Println("┌──────────────────────────────────────┬───────────────┬──────────────┬──────────┬──────────────────────────────────────┐")
-	fmt.Println("│ UID                                  │ 昵称          │ 状态         │ 积分     │ 详情                                 │")
-	fmt.Println("├──────────────────────────────────────┼───────────────┼──────────────┼──────────┼──────────────────────────────────────┤")
+	fmt.Println("┌──────────────────────────────────────┬───────────────┬──────────────┬──────────────┬──────────┬──────────────────────────────────────┐")
+	fmt.Println("│ UID                                  │ 昵称          │ 状态         │ 签到奖励     │ 总剩余   │ 详情                                 │")
+	fmt.Println("├──────────────────────────────────────┼───────────────┼──────────────┼──────────────┼──────────┼──────────────────────────────────────┤")
+	var totalRemain, totalSign int64
 	for _, r := range rows {
 		remain := "-"
 		if r.hasRem {
 			remain = fmt.Sprintf("%d", r.remain)
+			totalRemain += r.remain
 		}
-		fmt.Printf("│ %-36s │ %-13s │ %-12s │ %-8s │ %-36s │\n",
-			trunc(r.uid, 36), trunc(r.nick, 13), r.status, remain, trunc(r.detail, 36))
+		signin := "-"
+		if r.hasSign {
+			signin = fmt.Sprintf("%d", r.signin)
+			totalSign += r.signin
+		}
+		fmt.Printf("│ %-36s │ %-13s │ %-12s │ %-12s │ %-8s │ %-36s │\n",
+			trunc(r.uid, 36), trunc(r.nick, 13), r.status, signin, remain, trunc(r.detail, 36))
 	}
-	fmt.Println("└──────────────────────────────────────┴───────────────┴──────────────┴──────────┴──────────────────────────────────────┘")
+	fmt.Println("└──────────────────────────────────────┴───────────────┴──────────────┴──────────────┴──────────┴──────────────────────────────────────┘")
 	fmt.Println()
-	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  禁用=%d  失败=%d\n", len(rows), okN, alreadyN, disabledN, failN)
+	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  禁用=%d  失败=%d  累计签到奖励=%d  总剩余=%d\n",
+		len(rows), okN, alreadyN, disabledN, failN, totalSign, totalRemain)
 }
 
 func isAlready(msg string) bool {
@@ -144,6 +163,32 @@ func isAlready(msg string) bool {
 	return strings.Contains(s, "已签到") ||
 		strings.Contains(s, "already check") ||
 		strings.Contains(s, "already checked")
+}
+
+// claimWithRetry 执行签到；遇到服务端限流（参与用户太多）时自动重试。
+func claimWithRetry(up *upstream.Client, a *auth.Auth) error {
+	const (
+		retries = 3
+		wait    = 30 * time.Second
+	)
+	var lastErr error
+	for i := 0; i <= retries; i++ {
+		if i > 0 {
+			fmt.Printf("   ⏳ 签到被限流，%.0f 秒后重试 (%d/%d)...\n", wait.Seconds(), i, retries)
+			time.Sleep(wait)
+		}
+		lastErr = up.CheckinClaim(a)
+		if lastErr == nil {
+			return nil
+		}
+		msg := strings.ToLower(lastErr.Error())
+		if !strings.Contains(msg, "参与用户太多") &&
+			!strings.Contains(msg, "请稍后再试") &&
+			!strings.Contains(msg, "too many") {
+			return lastErr // 非限流错误，立即返回
+		}
+	}
+	return lastErr
 }
 
 func trunc(s string, n int) string {

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 login.ps1 — TRAE SOLO (CN) 登录工具（Windows PowerShell 版）
 流程：生成登录链接 → 浏览器登录 → 粘贴回调链接 → 换取 Token → 保存凭证 → 自动签到+查积分
@@ -83,8 +83,25 @@ Write-Host "  2. 登录成功后浏览器会跳到打不开的 127.0.0.1 地址"
 Write-Host "  3. 复制浏览器地址栏的完整链接，粘贴到下面（输入不回显）"
 Write-Host ""
 
+# 设备 ID：优先使用本机 TRAE SOLO CN 的绑定设备 ID（签到按设备校验，
+# 若用随机 deviceId 会导致签到被服务端拒绝）。未找到时回退随机值。
+$soloEnvPath = Join-Path $env:APPDATA 'TRAE SOLO CN\ModularData\ckg_server\local_env.json'
+$deviceId = $null
+if (Test-Path $soloEnvPath) {
+    try {
+        $soloEnv = Get-Content $soloEnvPath -Raw | ConvertFrom-Json
+        if ($soloEnv.device_id) {
+            $deviceId = [string]$soloEnv.device_id
+            Write-Host "已检测到本机 TRAE SOLO CN 设备 ID: $deviceId（签到需用此 ID 才能成功）" -ForegroundColor Green
+        }
+    } catch { }
+}
+if (-not $deviceId) {
+    $deviceId = New-Hex 16
+    Write-Host "⚠️ 未找到本机 TRAE SOLO CN 设备 ID（local_env.json），将使用随机 deviceId；"
+    Write-Host "   签到按设备绑定，随机 ID 可能导致签到被拒绝。请先安装并用 TRAE SOLO CN 登录一次。" -ForegroundColor Yellow
+}
 $machineId = New-Hex 16
-$deviceId  = New-Hex 16
 $traceId   = New-Hex 8
 
 $params = [ordered]@{
@@ -247,16 +264,22 @@ if (-not $NoSignin) {
         "Authorization"  = "Cloud-IDE-JWT $token"
         "X-User-Region"  = "CN"
         "X-Device-Id"    = $deviceId
+        "X-Machine-Id"   = $machineId
     }
     try {
         $st = Invoke-RestMethod -Uri "$UG_HOST/trae/api/v2/ug/checkin_credits/status" `
             -Method Post -Body "{}" -ContentType "application/json" `
             -Headers $ugHeaders -TimeoutSec 15
         if (-not $st.checked_in -and $st.enable) {
+            $claimBody = @{ device_id = $deviceId; machine_id = $machineId } | ConvertTo-Json
             $r = Invoke-RestMethod -Uri "$UG_HOST/trae/api/v2/ug/checkin_credits/claim" `
-                -Method Post -Body "{}" -ContentType "application/json" `
+                -Method Post -Body $claimBody -ContentType "application/json" `
                 -Headers $ugHeaders -TimeoutSec 15
-            Write-Host "签到: $($r.message)"
+            if ($r.code -and $r.code -ne 0 -and $r.code -ne 200) {
+                Write-Host "签到被拒: $($r.message)" -ForegroundColor Yellow
+            } else {
+                Write-Host "签到: $($r.message)"
+            }
         } else {
             Write-Host "签到状态: checked_in=$($st.checked_in) enable=$($st.enable)"
         }
@@ -267,13 +290,19 @@ if (-not $NoSignin) {
         $ent = Invoke-RestMethod -Uri "$UG_HOST/trae/api/v2/pay/ide_user_ent_usage" `
             -Method Post -Body "{}" -ContentType "application/json" `
             -Headers $ugHeaders -TimeoutSec 15
-        $total = [int64]0
+        $signin = [int64]0
         foreach ($p in $ent.user_entitlement_pack_list) {
-            $limit = [int64]$p.entitlement_base_info.quota.credits_limit
-            $used  = [int64]$p.usage.credits_amount
-            if ($limit -gt 0) { $total += ($limit - $used) }
+            $name = $p.entitlement_base_info.product_extra.package_extra.package_name
+            if ($name -eq "签到奖励") {
+                $signin += [int64]$p.entitlement_base_info.quota.credits_limit
+            }
         }
-        Write-Host "当前积分: $total"
+        if ($ent.usage_summary.total_amount) {
+            $remain = [int64]$ent.usage_summary.total_amount - [int64]$ent.usage_summary.consumed_amount
+            Write-Host "当前积分: 剩余$remain（累计签到奖励$signin）"
+        } else {
+            Write-Host "当前积分: 累计签到奖励$signin"
+        }
     } catch {
         Write-Host "查积分: $($_.Exception.Message)" -ForegroundColor Yellow
     }

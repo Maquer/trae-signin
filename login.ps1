@@ -83,8 +83,9 @@ Write-Host "  2. 登录成功后浏览器会跳到打不开的 127.0.0.1 地址"
 Write-Host "  3. 复制浏览器地址栏的完整链接，粘贴到下面（输入不回显）"
 Write-Host ""
 
-# 设备 ID：优先使用本机 TRAE SOLO CN 的绑定设备 ID（签到按设备校验，
-# 若用随机 deviceId 会导致签到被服务端拒绝）。未找到时回退随机值。
+# 设备 ID：优先复用本机 TraeWork 桌面端已绑定的设备 ID（签到按设备校验）。
+# 注意：必须先在本机用 TraeWork 桌面端登录过目标账号完成绑定，这里读取到的才是有效设备 ID；
+# 否则退化为随机 ID，签到会被服务端拒绝（9074）。
 $soloEnvPath = Join-Path $env:APPDATA 'TRAE SOLO CN\ModularData\ckg_server\local_env.json'
 $deviceId = $null
 if (Test-Path $soloEnvPath) {
@@ -92,14 +93,14 @@ if (Test-Path $soloEnvPath) {
         $soloEnv = Get-Content $soloEnvPath -Raw | ConvertFrom-Json
         if ($soloEnv.device_id) {
             $deviceId = [string]$soloEnv.device_id
-            Write-Host "已检测到本机 TRAE SOLO CN 设备 ID: $deviceId（签到需用此 ID 才能成功）" -ForegroundColor Green
+            Write-Host "已复用本机 TraeWork 桌面端设备 ID: $deviceId" -ForegroundColor Green
         }
     } catch { }
 }
 if (-not $deviceId) {
     $deviceId = New-Hex 16
-    Write-Host "⚠️ 未找到本机 TRAE SOLO CN 设备 ID（local_env.json），将使用随机 deviceId；"
-    Write-Host "   签到按设备绑定，随机 ID 可能导致签到被拒绝。请先安装并用 TRAE SOLO CN 登录一次。" -ForegroundColor Yellow
+    Write-Host "⚠️ 未找到本机 TraeWork 桌面端已绑定的设备 ID，将使用随机 deviceId；"
+    Write-Host "   签到按设备绑定，随机 ID 会被拒绝。请先安装 TraeWork 桌面端并用此账号登录一次。" -ForegroundColor Yellow
 }
 $machineId = New-Hex 16
 $traceId   = New-Hex 8
@@ -271,9 +272,8 @@ if (-not $NoSignin) {
             -Method Post -Body "{}" -ContentType "application/json" `
             -Headers $ugHeaders -TimeoutSec 15
         if (-not $st.checked_in -and $st.enable) {
-            $claimBody = @{ device_id = $deviceId; machine_id = $machineId } | ConvertTo-Json
             $r = Invoke-RestMethod -Uri "$UG_HOST/trae/api/v2/ug/checkin_credits/claim" `
-                -Method Post -Body $claimBody -ContentType "application/json" `
+                -Method Post -Body "{}" -ContentType "application/json" `
                 -Headers $ugHeaders -TimeoutSec 15
             if ($r.code -and $r.code -ne 0 -and $r.code -ne 200) {
                 Write-Host "签到被拒: $($r.message)" -ForegroundColor Yellow

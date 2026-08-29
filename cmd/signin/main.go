@@ -17,7 +17,6 @@ import (
 )
 
 type row struct {
-	file    string
 	uid     string
 	nick    string
 	status  string
@@ -57,7 +56,7 @@ func main() {
 	okN, alreadyN, failN, disabledN := 0, 0, 0, 0
 
 	for _, f := range files {
-		r := row{file: filepath.Base(f)}
+		r := row{}
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			r.status, r.detail = "LOAD_ERR", err.Error()

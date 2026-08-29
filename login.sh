@@ -10,14 +10,21 @@ API_HOST="https://api.trae.com.cn"
 
 mkdir -p "$AUTH_DIR"
 
-# 设备 ID：优先读取本机 TRAE SOLO CN 的绑定设备 ID（签到按设备校验，
-# 若用随机 deviceId 会导致签到被服务端拒绝）。未找到时回退随机值。
+# 设备 ID：优先复用本机 TraeWork 桌面端已绑定的设备 ID（签到按设备校验）。
+# 注意：必须先在本机用 TraeWork 桌面端登录过目标账号完成绑定，这里读取到的才是有效设备 ID；
+# 否则退化为随机 ID，签到会被服务端拒绝。
 TRAE_ENV_FILE=""
-if [ -n "$APPDATA" ] && [ -f "$APPDATA/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
-  TRAE_ENV_FILE="$APPDATA/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
-elif [ -f "$HOME/Library/Application Support/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+if [ -n "$APPDATA" ]; then
+  # Git Bash(Windows) 下 $APPDATA 是反斜杠路径，先转成 bash 可识别的正斜杠
+  APPDATA_POSIX="${APPDATA//\\//}"
+  if [ -f "$APPDATA_POSIX/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+    TRAE_ENV_FILE="$APPDATA_POSIX/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
+  fi
+fi
+if [ -z "$TRAE_ENV_FILE" ] && [ -f "$HOME/Library/Application Support/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
   TRAE_ENV_FILE="$HOME/Library/Application Support/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
-elif [ -f "$HOME/.config/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
+fi
+if [ -z "$TRAE_ENV_FILE" ] && [ -f "$HOME/.config/TRAE SOLO CN/ModularData/ckg_server/local_env.json" ]; then
   TRAE_ENV_FILE="$HOME/.config/TRAE SOLO CN/ModularData/ckg_server/local_env.json"
 fi
 DEVICE_ID=""
@@ -26,9 +33,10 @@ if [ -n "$TRAE_ENV_FILE" ] && command -v python3 >/dev/null 2>&1; then
 fi
 if [ -z "$DEVICE_ID" ]; then
   DEVICE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
-  echo "⚠️ 未找到本机 TRAE SOLO CN 设备 ID（local_env.json），使用随机 deviceId；签到按设备绑定，随机 ID 可能导致签到被拒" >&2
+  echo "⚠️ 未找到本机 TraeWork 桌面端已绑定的设备 ID（local_env.json），使用随机 deviceId；" >&2
+  echo "   签到按设备绑定，随机 ID 会被拒绝。请先在 Windows 安装 TraeWork 桌面端并用此账号登录一次。" >&2
 else
-  echo "已使用本机 TRAE SOLO CN 设备 ID: $DEVICE_ID"
+  echo "已复用本机 TraeWork 桌面端设备 ID: $DEVICE_ID"
 fi
 
 MACHINE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
@@ -236,7 +244,7 @@ PYEOF
 
 # 自动签到 + 查积分
 TOKEN="$TOKEN" DEVICE_ID="$DEVICE_ID" MACHINE_ID="$MACHINE_ID" python3 - <<'PYEOF'
-import json, os, time, urllib.request
+import json, os, urllib.request
 UG = "https://api.trae.cn"
 HDRS = {
     "Content-Type": "application/json",
@@ -253,8 +261,7 @@ def post(path, body=None):
 try:
     st = post("/trae/api/v2/ug/checkin_credits/status")
     if not st.get("checked_in") and st.get("enable"):
-        claim_body = {"device_id": os.environ["DEVICE_ID"], "machine_id": os.environ["MACHINE_ID"]}
-        r = post("/trae/api/v2/ug/checkin_credits/claim", claim_body)
+        r = post("/trae/api/v2/ug/checkin_credits/claim")  # 设备绑定通过 header X-Device-Id 传递
         code = r.get("code")
         if code and code not in (0, 200):
             print(f"签到被拒: {r.get('message', 'code %s' % code)}")

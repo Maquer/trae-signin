@@ -158,17 +158,9 @@ func (c *Client) CheckinStatus(a *auth.Auth) (checkedIn bool, credits int64, ena
 }
 
 // CheckinClaim 执行签到。
-// 服务端要求提交 device_id / machine_id，缺失会返回 code 9004 订单参数错误。
+// 与官方客户端一致：body 为空，设备绑定通过 header 的 X-Device-Id 传递。
 func (c *Client) CheckinClaim(a *auth.Auth) error {
-	body := map[string]any{}
-	if a.DeviceID != "" {
-		body["device_id"] = a.DeviceID
-	}
-	if a.MachineID != "" {
-		body["machine_id"] = a.MachineID
-	}
-	raw, _ := json.Marshal(body)
-	req, err := http.NewRequest(http.MethodPost, UgHost+EpCheckinClaim, bytes.NewReader(raw))
+	req, err := http.NewRequest(http.MethodPost, UgHost+EpCheckinClaim, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return err
 	}

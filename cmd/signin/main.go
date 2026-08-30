@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"trae-signin/internal/auth"
@@ -28,13 +27,6 @@ type row struct {
 }
 
 func main() {
-	// Windows 控制台默认 GBK 代码页，改为 UTF-8 避免中文乱码
-	if runtime.GOOS == "windows" {
-		mod := syscall.NewLazyDLL("kernel32.dll")
-		proc := mod.NewProc("SetConsoleOutputCP")
-		proc.Call(65001)
-	}
-
 	dir := "auths"
 	if len(os.Args) > 1 {
 		dir = os.Args[1]

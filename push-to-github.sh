@@ -11,7 +11,7 @@ if [ -z "$GITHUB_USER" ]; then
 fi
 
 echo "📦 创建 GitHub 仓库 $GITHUB_USER/$REPO_NAME ..."
-gh repo create "$GITHUB_USER/$REPO_NAME" --public --source=. --push || {
+gh repo create "$GITHUB_USER/$REPO_NAME" --public --source=. || {
     echo "仓库可能已存在，尝试直接推送..."
 }
 

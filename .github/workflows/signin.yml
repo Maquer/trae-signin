@@ -2,12 +2,21 @@ name: TRAE 每日签到
 
 on:
   schedule:
-    # 每天 00:00 UTC = 08:00 北京时间
+    # 主：每天 00:00 UTC = 08:00 北京时间
     - cron: '0 0 * * *'
+    # 备：GitHub Actions 定时任务对低活跃仓库可能延迟或跳过，
+    #     加一个 04:00 UTC = 12:00 北京时间的备份时段兜底。
+    #     若主时段已签，此时段会得到"已签到"结果，不会重复签到。
+    - cron: '0 4 * * *'
   workflow_dispatch: # 支持手动触发
 
 permissions:
   contents: read
+
+# 同一时间只允许一个签到任务运行，避免重复签到触发 9074
+concurrency:
+  group: trae-signin
+  cancel-in-progress: false
 
 jobs:
   signin:
@@ -17,11 +26,14 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1 # 只需最新代码，浅克隆加速
 
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: go.mod # 自动读取 go.mod 中的 Go 版本，避免硬编码漂移
+          cache: true
 
       - name: 编译签到工具
         run: go build -o signin_bin ./cmd/signin
@@ -87,11 +99,35 @@ jobs:
           ALREADY=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '已签=[0-9]+' | grep -oE '[0-9]+' | head -1)
           FAIL=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '失败=[0-9]+' | grep -oE '[0-9]+' | head -1)
           SIGNIN=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '累计签到奖励=[0-9]+' | grep -oE '[0-9]+' | head -1)
+          REMAIN=$(printf '%s' "$SIGNIN_OUTPUT" | grep -oE '总剩余=[0-9]+' | grep -oE '[0-9]+' | head -1)
           echo "total=${TOTAL:-?}" >> "$GITHUB_OUTPUT"
           echo "ok=${OK:-?}" >> "$GITHUB_OUTPUT"
           echo "already=${ALREADY:-?}" >> "$GITHUB_OUTPUT"
           echo "fail=${FAIL:-?}" >> "$GITHUB_OUTPUT"
           echo "signin=${SIGNIN:-?}" >> "$GITHUB_OUTPUT"
+          echo "remain=${REMAIN:-?}" >> "$GITHUB_OUTPUT"
+
+          # Job Summary — 在 Actions 运行页面显示可读结果
+          {
+            echo "## TRAE 签到结果"
+            echo ""
+            echo "| 指标 | 值 |"
+            echo "|------|------|"
+            echo "| 总计 | ${TOTAL:-?} |"
+            echo "| 签到成功 | ${OK:-?} |"
+            echo "| 已签 | ${ALREADY:-?} |"
+            echo "| 失败 | ${FAIL:-?} |"
+            echo "| 累计签到奖励 | ${SIGNIN:-?} |"
+            echo "| 总剩余 | ${REMAIN:-?} |"
+            echo ""
+            echo "<details><summary>完整输出</summary>"
+            echo ""
+            echo '```'
+            echo "$SIGNIN_OUTPUT"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Bark 通知
         if: always()
@@ -103,13 +139,14 @@ jobs:
           ALREADY: ${{ steps.result.outputs.already }}
           FAIL: ${{ steps.result.outputs.fail }}
           SIGNIN: ${{ steps.result.outputs.signin }}
+          REMAIN: ${{ steps.result.outputs.remain }}
         run: |
           set -e
           if [ -z "$BARK_URL" ]; then
             echo "未配置 BARK_URL，跳过 Bark 推送"
             exit 0
           fi
-          # 未配置账号时推送明确提示，避免发送无意义的“0 成功”通知
+          # 未配置账号时推送明确提示，避免发送无意义的"0 成功"通知
           if [ "$NO_ACCOUNTS" = "true" ]; then
             TITLE="⚠️ TRAE 未配置账号"
             BODY="请到仓库 Settings → Secrets and variables → Actions 配置 TRAE_AUTH_1/2/3 后重试"
@@ -118,7 +155,7 @@ jobs:
             if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
               TITLE="⚠️ TRAE 签到异常"
             fi
-            BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?} 累计签到奖励${SIGNIN:-?}"
+            BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?} 签到奖励${SIGNIN:-?} 剩余${REMAIN:-?}"
           fi
           TITLE_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$TITLE")
           BODY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$BODY")

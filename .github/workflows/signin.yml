@@ -2,18 +2,12 @@ name: TRAE 每日签到
 
 on:
   schedule:
-    # 主：每天 00:00 UTC = 08:00 北京时间
-    - cron: '0 0 * * *'
-    # 备：GitHub Actions 定时任务对低活跃仓库可能延迟或跳过，
-    #     加一个 04:00 UTC = 12:00 北京时间的备份时段兜底。
-    #     若主时段已签，此时段会得到"已签到"结果，不会重复签到。
-    - cron: '0 4 * * *'
-  workflow_dispatch: # 支持手动触发
+    - cron: '0 0 * * *' # 00:00 UTC = 08:00 北京时间
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# 同一时间只允许一个签到任务运行，避免重复签到触发 9074
 concurrency:
   group: trae-signin
   cancel-in-progress: false
@@ -21,26 +15,22 @@ concurrency:
 jobs:
   signin:
     runs-on: ubuntu-latest
-    # 防止某个步骤意外挂起时长期占用 runner（GitHub 默认上限 6h）
     timeout-minutes: 30
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 # 只需最新代码，浅克隆加速
+          fetch-depth: 1
 
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod # 自动读取 go.mod 中的 Go 版本，避免硬编码漂移
+          go-version-file: go.mod
           cache: true
 
       - name: 编译签到工具
         run: go build -o signin_bin ./cmd/signin
 
-      # 只写入已配置的 Secret，未配置的账号自动跳过，避免生成空凭证文件导致误报失败。
-      # 通过 env 注入 secret，避免 JSON 中的单引号破坏 shell 语法。
-      # 未配置任何账号时输出 no_accounts=true，后续步骤跳过签到并给出明确提示。
       - name: 生成凭证文件
         id: gen
         env:
@@ -51,40 +41,41 @@ jobs:
           set -e
           mkdir -p auths
           COUNT=0
-          if [ -n "$AUTH_1" ]; then
-            printf '%s' "$AUTH_1" > auths/trae-1.json
-            COUNT=$((COUNT+1))
-          fi
-          if [ -n "$AUTH_2" ]; then
-            printf '%s' "$AUTH_2" > auths/trae-2.json
-            COUNT=$((COUNT+1))
-          fi
-          if [ -n "$AUTH_3" ]; then
-            printf '%s' "$AUTH_3" > auths/trae-3.json
-            COUNT=$((COUNT+1))
-          fi
-          # 如需更多账号，继续添加 TRAE_AUTH_N 对应的判断
+          if [ -n "$AUTH_1" ]; then printf '%s' "$AUTH_1" > auths/trae-1.json; COUNT=$((COUNT+1)); fi
+          if [ -n "$AUTH_2" ]; then printf '%s' "$AUTH_2" > auths/trae-2.json; COUNT=$((COUNT+1)); fi
+          if [ -n "$AUTH_3" ]; then printf '%s' "$AUTH_3" > auths/trae-3.json; COUNT=$((COUNT+1)); fi
           if [ "$COUNT" -eq 0 ]; then
             echo "::warning::未配置任何账号 Secret（TRAE_AUTH_1/2/3），已跳过签到"
             echo "no_accounts=true" >> "$GITHUB_OUTPUT"
           else
             echo "no_accounts=false" >> "$GITHUB_OUTPUT"
-            echo "已生成凭证文件："
             ls -la auths
           fi
 
       - name: 执行签到
-        # 未配置任何账号时跳过签到，避免无意义的失败日志
         if: steps.gen.outputs.no_accounts != 'true'
-        # continue-on-error：即使签到失败（如 token 失效），
-        # 也继续执行提取结果 / Bark 通知；退出码会如实记录在日志中
         continue-on-error: true
         run: |
           set +e
+
+          echo "🔄 尝试 1/2..."
           OUTPUT=$(./signin_bin auths 2>&1)
           EXIT_CODE=$?
-          set -e
           echo "$OUTPUT"
+
+          # 检查是否有签到失败或程序异常退出
+          FAIL_COUNT=$(printf '%s' "$OUTPUT" | grep -oE '失败=[0-9]+' | grep -oE '[0-9]+' | head -1)
+
+          if [ "${FAIL_COUNT:-0}" -gt 0 ] || [ "$EXIT_CODE" -ne 0 ]; then
+            echo "⚠️ 失败=${FAIL_COUNT:-?} 退出码=${EXIT_CODE}，30 秒后重试..."
+            sleep 30
+            echo "🔄 尝试 2/2..."
+            OUTPUT=$(./signin_bin auths 2>&1)
+            EXIT_CODE=$?
+            echo "$OUTPUT"
+          fi
+
+          set -e
           echo "SIGNIN_OUTPUT<<EOF" >> "$GITHUB_ENV"
           echo "$OUTPUT" >> "$GITHUB_ENV"
           echo "EOF" >> "$GITHUB_ENV"
@@ -107,7 +98,7 @@ jobs:
           echo "signin=${SIGNIN:-?}" >> "$GITHUB_OUTPUT"
           echo "remain=${REMAIN:-?}" >> "$GITHUB_OUTPUT"
 
-          # Job Summary — 在 Actions 运行页面显示可读结果
+          # Job Summary
           {
             echo "## TRAE 签到结果"
             echo ""
@@ -142,24 +133,17 @@ jobs:
           REMAIN: ${{ steps.result.outputs.remain }}
         run: |
           set -e
-          if [ -z "$BARK_URL" ]; then
-            echo "未配置 BARK_URL，跳过 Bark 推送"
-            exit 0
-          fi
-          # 未配置账号时推送明确提示，避免发送无意义的"0 成功"通知
+          if [ -z "$BARK_URL" ]; then echo "未配置 BARK_URL，跳过"; exit 0; fi
           if [ "$NO_ACCOUNTS" = "true" ]; then
             TITLE="⚠️ TRAE 未配置账号"
-            BODY="请到仓库 Settings → Secrets and variables → Actions 配置 TRAE_AUTH_1/2/3 后重试"
+            BODY="请到仓库 Settings → Secrets and variables → Actions 配置 TRAE_AUTH_1/2/3"
           else
             TITLE="✅ TRAE 签到"
-            if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then
-              TITLE="⚠️ TRAE 签到异常"
-            fi
+            if [ "${FAIL:-0}" -gt 0 ] 2>/dev/null; then TITLE="⚠️ TRAE 签到异常"; fi
             BODY="总计${TOTAL:-?} 成功${OK:-?} 已签${ALREADY:-?} 失败${FAIL:-?} 签到奖励${SIGNIN:-?} 剩余${REMAIN:-?}"
           fi
           TITLE_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$TITLE")
           BODY_ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$BODY")
-          # --max-time 防止网络异常时 curl 永久挂起
           curl -s --max-time 15 -X POST "${BARK_URL}/${TITLE_ENC}/${BODY_ENC}" || true
 
       - name: 清理凭证

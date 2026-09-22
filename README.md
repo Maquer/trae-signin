@@ -49,8 +49,9 @@ export BARK_URL="https://api.day.app/你的Key"
 推送内容示例：
 
 > **✅ TRAE 签到成功**
-> 总计1 | 成功1 | 已签0 | 失败0
-> 弎水 ✅ OK 积分5100
+> 总计2 | 成功2 | 已签0 | 禁用0 | 失败0
+> 弎水 ✅ OK 积分7100
+> 用户0670362 ✅ OK 积分6700
 
 ## 定时签到
 
@@ -86,20 +87,11 @@ crontab -e
 0 8 * * * cd /path/to/trae-signin && bash signin.sh >> signin.log 2>&1
 ```
 
-### 方式三：内置调度器
-
-```bash
-go build -o scheduler ./cmd/scheduler
-./scheduler &
-# → 每天 08:00 自动签到
-```
-
 ## 目录结构
 
 ```
 cmd/
-├── signin/main.go      签到入口
-└── scheduler/main.go   定时调度器
+└── signin/main.go      签到入口
 
 internal/
 ├── auth/auth.go        凭证文件解析与原子写回

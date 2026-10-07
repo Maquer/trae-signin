@@ -213,6 +213,9 @@ func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
 		return nil, err
 	}
 	var resp struct {
+		UsageSummary struct {
+			TotalAmount float64 `json:"total_amount"`
+		} `json:"usage_summary"`
 		UserEntitlementPackList []struct {
 			DisplayDesc         string `json:"display_desc"`
 			GroupName           string `json:"group_name"`
@@ -221,7 +224,7 @@ func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
 			EntitlementBaseInfo struct {
 				EntitlementID string `json:"entitlement_id"`
 				Quota         struct {
-					CreditsLimit int64 `json:"credits_limit"`
+					CreditsLimit float64 `json:"credits_limit"`
 				} `json:"quota"`
 			} `json:"entitlement_base_info"`
 		} `json:"user_entitlement_pack_list"`
@@ -232,7 +235,7 @@ func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
 
 	s := &CreditSummary{}
 	for _, p := range resp.UserEntitlementPackList {
-		credits := p.EntitlementBaseInfo.Quota.CreditsLimit
+		credits := int64(p.EntitlementBaseInfo.Quota.CreditsLimit)
 		desc := p.DisplayDesc
 		if desc == "" {
 			desc = p.GroupName
@@ -242,8 +245,7 @@ func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
 			strings.Contains(desc, "签到") ||
 			strings.Contains(p.EntitlementBaseInfo.EntitlementID, "checkin")
 
-		s.Total += credits
-		if credits <= 0 { // 免费权益壳，无额度，不计入拆分
+		if credits <= 0 { // 免费权益壳，无额度，不计入
 			continue
 		}
 		s.Packs = append(s.Packs, CreditPack{
@@ -260,6 +262,14 @@ func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
 				s.MonthExp = p.ExpireTime
 			}
 		}
+	}
+
+	// 以服务端 usage_summary.total_amount 为准：它是真实可用总额，
+	// 而各包 credits_limit 只是名义额度（消耗后 total 会下降、limit 不变）。
+	if resp.UsageSummary.TotalAmount > 0 {
+		s.Total = int64(resp.UsageSummary.TotalAmount)
+	} else {
+		s.Total = s.Month + s.Checkin
 	}
 	return s, nil
 }

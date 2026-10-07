@@ -4,6 +4,7 @@ package upstream
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -138,15 +139,39 @@ func (c *Client) CheckinStatus(a *auth.Auth) (checkedIn bool, credits int64, ena
 	return resp.CheckedIn, resp.Credits, resp.Enable, nil
 }
 
-// CheckinClaim 执行签到。
+// ErrBusy 表示服务端限流（签到人数过多），可稍后重试。
+var ErrBusy = errors.New("busy")
+
+// checkinResp 签到接口的业务响应。注意：HTTP 200 不代表业务成功，
+// 必须检查 code 字段（非 0 即为失败）。
+type checkinResp struct {
+	Code    int64  `json:"code"`
+	Message string `json:"message"`
+}
+
+// CheckinClaim 执行签到。返回 ErrBusy 表示服务端限流，应稍后重试。
 func (c *Client) CheckinClaim(a *auth.Auth) error {
 	req, err := http.NewRequest(http.MethodPost, UgHost+EpCheckinClaim, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return err
 	}
 	ugHeaders(req, a)
-	_, err = c.doJSON(req)
-	return err
+	data, err := c.doJSON(req)
+	if err != nil {
+		return err
+	}
+	var r checkinResp
+	if err := json.Unmarshal(data, &r); err != nil {
+		return fmt.Errorf("claim parse: %w", err)
+	}
+	if r.Code == 0 {
+		return nil
+	}
+	// 9074 = 参与人数过多；其余非零码一律视为业务失败
+	if r.Code == 9074 || strings.Contains(r.Message, "稍后") || strings.Contains(r.Message, "太多") {
+		return fmt.Errorf("%w: code=%d %s", ErrBusy, r.Code, r.Message)
+	}
+	return fmt.Errorf("claim rejected: code=%d %s", r.Code, r.Message)
 }
 
 // CreditPack 单个积分包的摘要。

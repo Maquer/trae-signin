@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"errors"
 	"trae-signin/internal/auth"
 	"trae-signin/internal/upstream"
 )
@@ -42,7 +43,7 @@ func main() {
 	up := upstream.New()
 
 	var rows []row
-	okN, alreadyN, failN, disabledN, unconfirmedN := 0, 0, 0, 0, 0
+	okN, alreadyN, failN, disabledN, unconfirmedN, busyN := 0, 0, 0, 0, 0, 0
 
 	for _, f := range files {
 		r := row{file: filepath.Base(f)}
@@ -105,14 +106,34 @@ func main() {
 				beforeChk = sum.Checkin
 			}
 
-			if err := up.CheckinClaim(a); err != nil {
-				r.status = "FAIL"
-				r.detail = short(err.Error())
-				failN++
+			// 服务端限流（code=9074）时退避重试，最多 3 次
+			var claimErr error
+			for attempt := 1; attempt <= 3; attempt++ {
+				claimErr = up.CheckinClaim(a)
+				if claimErr == nil || !errors.Is(claimErr, upstream.ErrBusy) {
+					break
+				}
+				if attempt < 3 {
+					wait := time.Duration(attempt*attempt) * 3 * time.Second
+					fmt.Printf("   ⏳ %s 服务繁忙，%v 后重试 (%d/3)\n", r.uid, wait, attempt)
+					time.Sleep(wait)
+				}
+			}
+
+			if claimErr != nil {
+				if errors.Is(claimErr, upstream.ErrBusy) {
+					r.status = "BUSY"
+					r.detail = "服务端限流，重试3次仍失败"
+					busyN++
+				} else {
+					r.status = "FAIL"
+					r.detail = short(claimErr.Error())
+					failN++
+				}
 				break
 			}
 
-			// 回查确认：接口 200 不等于真的到账（服务端可能风控静默拦截）
+			// 回查确认：claim 成功也要验证积分真的到账
 			afterIn, _, _, aerr := up.CheckinStatus(a)
 			afterChk := int64(0)
 			if sum, e := up.UserCreditSummary(a); e == nil {
@@ -177,8 +198,8 @@ func main() {
 	}
 	fmt.Println("└────────────────────┴───────────────┴──────────────┴───────┴───────┴───────┴──────────────────────────────┘")
 	fmt.Println()
-	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  禁用=%d  未确认=%d  失败=%d\n",
-		len(rows), okN, alreadyN, disabledN, unconfirmedN, failN)
+	fmt.Printf("📊 总计=%d  签到成功=%d  已签=%d  禁用=%d  未确认=%d  限流=%d  失败=%d\n",
+		len(rows), okN, alreadyN, disabledN, unconfirmedN, busyN, failN)
 	fmt.Printf("💰 本次确认到账积分=%d\n", okN*100)
 
 	// 签到包过期提醒（7 天内）

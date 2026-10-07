@@ -149,33 +149,94 @@ func (c *Client) CheckinClaim(a *auth.Auth) error {
 	return err
 }
 
-// UserEntUsage 查询积分余额。
+// CreditPack 单个积分包的摘要。
+type CreditPack struct {
+	Credits   int64  // 该包额度
+	Desc      string // 展示名（display_desc / group_name 兜底）
+	Expire    int64  // 过期 Unix 秒，0 表示无
+	IsCheckin bool   // 是否签到奖励包
+}
+
+// CreditSummary 账号积分的完整拆分。
+type CreditSummary struct {
+	Total    int64        // 合计
+	Month    int64        // 每月登录赠送额度
+	Checkin  int64        // 签到奖励额度
+	MonthExp int64        // 月赠过期时间
+	ChkExp   int64        // 签到包过期时间
+	Packs    []CreditPack // 明细
+}
+
+// UserEntUsage 查询积分余额（合计）。保留向后兼容。
 func (c *Client) UserEntUsage(a *auth.Auth) (remain int64, err error) {
-	req, err := http.NewRequest(http.MethodPost, UgHost+EpEntUsage, bytes.NewReader([]byte("{}")))
+	s, err := c.UserCreditSummary(a)
 	if err != nil {
 		return 0, err
+	}
+	return s.Total, nil
+}
+
+// UserCreditSummary 查询积分余额并拆分签到包 / 月赠包。
+func (c *Client) UserCreditSummary(a *auth.Auth) (*CreditSummary, error) {
+	req, err := http.NewRequest(http.MethodPost, UgHost+EpEntUsage, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, err
 	}
 	ugHeaders(req, a)
 	data, err := c.doJSON(req)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var resp struct {
 		UserEntitlementPackList []struct {
+			DisplayDesc         string `json:"display_desc"`
+			GroupName           string `json:"group_name"`
+			GroupType           int64  `json:"group_type"`
+			ExpireTime          int64  `json:"expire_time"`
 			EntitlementBaseInfo struct {
-				Quota struct {
+				EntitlementID string `json:"entitlement_id"`
+				Quota         struct {
 					CreditsLimit int64 `json:"credits_limit"`
 				} `json:"quota"`
 			} `json:"entitlement_base_info"`
 		} `json:"user_entitlement_pack_list"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return 0, fmt.Errorf("ent usage parse: %w", err)
+		return nil, fmt.Errorf("ent usage parse: %w", err)
 	}
+
+	s := &CreditSummary{}
 	for _, p := range resp.UserEntitlementPackList {
-		remain += p.EntitlementBaseInfo.Quota.CreditsLimit
+		credits := p.EntitlementBaseInfo.Quota.CreditsLimit
+		desc := p.DisplayDesc
+		if desc == "" {
+			desc = p.GroupName
+		}
+		isChk := p.GroupType == 1 ||
+			strings.Contains(p.GroupName, "签到") ||
+			strings.Contains(desc, "签到") ||
+			strings.Contains(p.EntitlementBaseInfo.EntitlementID, "checkin")
+
+		s.Total += credits
+		if credits <= 0 { // 免费权益壳，无额度，不计入拆分
+			continue
+		}
+		s.Packs = append(s.Packs, CreditPack{
+			Credits: credits, Desc: desc, Expire: p.ExpireTime, IsCheckin: isChk,
+		})
+		if isChk {
+			s.Checkin += credits
+			if p.ExpireTime > s.ChkExp {
+				s.ChkExp = p.ExpireTime
+			}
+		} else {
+			s.Month += credits
+			if p.ExpireTime > s.MonthExp {
+				s.MonthExp = p.ExpireTime
+			}
+		}
 	}
-	return remain, nil
+	return s, nil
 }
 
 func ugHeaders(req *http.Request, a *auth.Auth) {

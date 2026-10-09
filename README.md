@@ -81,9 +81,9 @@ export BARK_URL="https://api.day.app/你的Key"
 `%APPDATA%\TRAE SOLO CN\` 或 `%APPDATA%\Trae\`），搜索 `iCubeAuthInfo://icube-dc`：
 
 ```json
-"iCubeAuthInfo://icube-dc:357765834083513": "dGMFEAAA..."
+"iCubeAuthInfo://icube-dc:1234567890123": "dGMFEAAA..."
                         ^^^^^^^^^^^^^^^
-                        这串数字就是设备号（12~20 位十进制）
+                        这串数字就是设备号（12~20 位十进制，示例中为占位值）
 ```
 
 **注意**：不要用 `telemetry.devDeviceId`（UUID 格式，会被拒绝）。
@@ -108,7 +108,7 @@ export BARK_URL="https://api.day.app/你的Key"
 
 ```bash
 # 登录时指定设备号（不再随机生成）
-DEVICE_ID=357765834083513 ./login.sh
+DEVICE_ID=1234567890123 ./login.sh
 
 # 已有凭证文件的话，直接改 deviceId 字段即可
 ```

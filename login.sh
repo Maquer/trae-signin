@@ -3,11 +3,11 @@
 #
 # ⚠️ 重要：必须传入真实设备号，否则签到会返回 code=9074
 #    设备号来自装了 TRAE 客户端的机器，藏在客户端 storage.json 的键名里：
-#      "iCubeAuthInfo://icube-dc:357765834083513": "..."
+#      "iCubeAuthInfo://icube-dc:1234567890123": "..."
 #                                 ^^^^^^^^^^^^^^^ 这就是设备号（12~20 位十进制数字）
 #
 #    用法：
-#      DEVICE_ID=357765834083513 ./login.sh
+#      DEVICE_ID=1234567890123 ./login.sh
 #      或交互式输入
 set -euo pipefail
 

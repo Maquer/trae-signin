@@ -250,6 +250,7 @@ HDRS = {
     "Content-Type": "application/json",
     "Authorization": "Cloud-IDE-JWT " + os.environ["TOKEN"],
     "X-User-Region": "CN",
+    "x-device-id": os.environ["DEVICE_ID"],
     "X-Device-Id": os.environ["DEVICE_ID"],
 }
 def post(path, body=b"{}"):

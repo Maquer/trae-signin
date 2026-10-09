@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # login.sh — TRAE SOLO 登录：生成登录链接 → 浏览器登录 → 粘贴回调链接 → 换 token 落盘。
+#
+# ⚠️ 重要：必须传入真实设备号，否则签到会返回 code=9074
+#    设备号来自装了 TRAE 客户端的机器，藏在客户端 storage.json 的键名里：
+#      "iCubeAuthInfo://icube-dc:357765834083513": "..."
+#                                 ^^^^^^^^^^^^^^^ 这就是设备号（12~20 位十进制数字）
+#
+#    用法：
+#      DEVICE_ID=357765834083513 ./login.sh
+#      或交互式输入
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -10,8 +19,27 @@ API_HOST="https://api.trae.com.cn"
 
 mkdir -p "$AUTH_DIR"
 
-MACHINE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
-DEVICE_ID="$(openssl rand -hex 16 2>/dev/null || python3 -c 'import secrets;print(secrets.token_hex(16))')"
+# ---- 设备号：必须真实，不能随机生成 ----
+DEVICE_ID="${DEVICE_ID:-}"
+if [ -z "$DEVICE_ID" ]; then
+    echo "============================================================"
+    echo "  需要真实设备号（否则签到会返回 code=9074）"
+    echo "============================================================"
+    echo "  获取方法：在装了 TRAE 客户端的机器上，打开 storage.json，"
+    echo "  搜索 iCubeAuthInfo://icube-dc，冒号后的数字即为设备号。"
+    echo ""
+    read -rp "  请输入设备号（纯数字）: " DEVICE_ID
+fi
+
+# 校验：必须是 12~20 位十进制数字（UUID / 32位hex 会被服务端拒绝）
+if ! echo "$DEVICE_ID" | grep -qE '^[0-9]{12,20}$'; then
+    echo "❌ 设备号格式错误：$DEVICE_ID"
+    echo "   必须是 12~20 位纯数字。（UUID、32 位 hex 会被服务端直接忽略）"
+    exit 1
+fi
+echo "✅ 设备号: $DEVICE_ID"
+
+MACHINE_ID="$DEVICE_ID"
 
 echo "============================================================"
 echo "  TRAE SOLO 登录 - 纯签到版"

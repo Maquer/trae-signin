@@ -45,16 +45,16 @@ jobs:
           echo "$SIGNIN_OUTPUT" | grep -oP '签到成功=\K\d+' | head -1 | xargs -I{} echo "ok={}" >> $GITHUB_OUTPUT || echo "ok=?" >> $GITHUB_OUTPUT
           echo "$SIGNIN_OUTPUT" | grep -oP '已签=\K\d+' | head -1 | xargs -I{} echo "already={}" >> $GITHUB_OUTPUT || echo "already=?" >> $GITHUB_OUTPUT
           echo "$SIGNIN_OUTPUT" | grep -oP '未确认=\K\d+' | head -1 | xargs -I{} echo "unconf={}" >> $GITHUB_OUTPUT || echo "unconf=0" >> $GITHUB_OUTPUT
-          echo "$SIGNIN_OUTPUT" | grep -oP '限流=\K\d+' | head -1 | xargs -I{} echo "busy={}" >> $GITHUB_OUTPUT || echo "busy=0" >> $GITHUB_OUTPUT
+          echo "$SIGNIN_OUTPUT" | grep -oP '设备异常=\K\d+' | head -1 | xargs -I{} echo "busy={}" >> $GITHUB_OUTPUT || echo "busy=0" >> $GITHUB_OUTPUT
           echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' | head -1 | xargs -I{} echo "fail={}" >> $GITHUB_OUTPUT || echo "fail=?" >> $GITHUB_OUTPUT
 
       - name: Bark 通知
         if: always()
         run: |
           TITLE="✅ TRAE签到"
-          BODY="总计${{ steps.result.outputs.total }} 成功${{ steps.result.outputs.ok }} 已签${{ steps.result.outputs.already }} 未确认${{ steps.result.outputs.unconf }} 限流${{ steps.result.outputs.busy }} 失败${{ steps.result.outputs.fail }}"
+          BODY="总计${{ steps.result.outputs.total }} 成功${{ steps.result.outputs.ok }} 已签${{ steps.result.outputs.already }} 未确认${{ steps.result.outputs.unconf }} 设备异常${{ steps.result.outputs.busy }} 失败${{ steps.result.outputs.fail }}"
           if [ "${{ steps.result.outputs.busy }}" -gt 0 ] 2>/dev/null; then
-            TITLE="⏳ TRAE签到限流"
+            TITLE="🔑 TRAE设备号异常"
           fi
           if [ "${{ steps.result.outputs.unconf }}" -gt 0 ] 2>/dev/null; then
             TITLE="⚠️ TRAE签到未确认"

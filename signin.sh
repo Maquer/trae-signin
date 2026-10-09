@@ -26,8 +26,8 @@ FAIL=$(echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' || echo "?")
 # 未确认：接口返回成功但未真正到账（疑似风控），不计入失败但要提示
 UNCONF=$(echo "$SIGNIN_OUTPUT" | grep -oP '未确认=\K\d+' || echo "0")
 UNCONF=${UNCONF:-0}
-# 限流：服务端人数过多（code=9074），重试后仍失败
-BUSY=$(echo "$SIGNIN_OUTPUT" | grep -oP '限流=\K\d+' || echo "0")
+# 设备异常：设备号未被服务端认可（code=9074）
+BUSY=$(echo "$SIGNIN_OUTPUT" | grep -oP '设备异常=\K\d+' || echo "0")
 BUSY=${BUSY:-0}
 
 # 提取每个账号的信息（表格列：UID | 昵称 | 状态 | 总计 | 月赠 | 签到 | 详情）
@@ -45,7 +45,7 @@ done <<< "$SIGNIN_OUTPUT"
 # 构建 Bark 推送内容
 TITLE="TRAE 签到"
 if [ "$BUSY" -gt 0 ] 2>/dev/null; then
-    TITLE="⏳ TRAE 签到限流"
+    TITLE="🔑 TRAE 设备号异常"
 elif [ "$UNCONF" -gt 0 ] 2>/dev/null; then
     TITLE="⚠️ TRAE 签到未确认"
 elif [ "$SIGNIN_EXIT" -eq 0 ]; then
@@ -60,7 +60,7 @@ else
     TITLE="❌ TRAE 签到失败"
 fi
 
-BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 未确认${UNCONF} | 限流${BUSY} | 失败${FAIL}\n${ACCOUNTS}"
+BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 未确认${UNCONF} | 设备异常${BUSY} | 失败${FAIL}\n${ACCOUNTS}"
 
 # 发送 Bark 通知
 if [ -n "$BARK_URL" ]; then

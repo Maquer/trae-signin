@@ -139,8 +139,10 @@ func (c *Client) CheckinStatus(a *auth.Auth) (checkedIn bool, credits int64, ena
 	return resp.CheckedIn, resp.Credits, resp.Enable, nil
 }
 
-// ErrBusy 表示服务端限流（签到人数过多），可稍后重试。
-var ErrBusy = errors.New("busy")
+// ErrBusy 表示设备校验未通过（服务端以 code=9074 返回）。
+// 注意：文案「当前参与用户太多」是误导，真实原因是 x-device-id
+// 不是客户端真实注册的设备号（随机 UUID/hex 会被直接拒绝）。
+var ErrBusy = errors.New("device_rejected")
 
 // checkinResp 签到接口的业务响应。注意：HTTP 200 不代表业务成功，
 // 必须检查 code 字段（非 0 即为失败）。
@@ -149,7 +151,7 @@ type checkinResp struct {
 	Message string `json:"message"`
 }
 
-// CheckinClaim 执行签到。返回 ErrBusy 表示服务端限流，应稍后重试。
+// CheckinClaim 执行签到。返回 ErrBusy 表示设备校验未通过，需更换真实设备号。
 func (c *Client) CheckinClaim(a *auth.Auth) error {
 	req, err := http.NewRequest(http.MethodPost, UgHost+EpCheckinClaim, bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -167,9 +169,9 @@ func (c *Client) CheckinClaim(a *auth.Auth) error {
 	if r.Code == 0 {
 		return nil
 	}
-	// 9074 = 参与人数过多；其余非零码一律视为业务失败
-	if r.Code == 9074 || strings.Contains(r.Message, "稍后") || strings.Contains(r.Message, "太多") {
-		return fmt.Errorf("%w: code=%d %s", ErrBusy, r.Code, r.Message)
+	// 9074：设备校验未通过（文案伪装成「用户太多」）
+	if r.Code == 9074 {
+		return fmt.Errorf("%w: code=9074 设备号未被服务端认可", ErrBusy)
 	}
 	return fmt.Errorf("claim rejected: code=%d %s", r.Code, r.Message)
 }
@@ -281,8 +283,18 @@ func ugHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Authorization", "Cloud-IDE-JWT "+a.JWT())
 	req.Header.Set("X-User-Region", "CN")
 	if a.DeviceID != "" {
+		// 关键：必须是「客户端真实注册的设备号」（12~20 位十进制数字）。
+		// 随机 UUID / 32 位 hex 会被服务端判为无效设备，claim 返回 code=9074
+		// （文案「当前参与用户太多」是误导，真实原因是设备校验不通过）。
+		// 同时用小写头名，与官方客户端一致。
+		req.Header.Set("x-device-id", a.DeviceID)
 		req.Header.Set("X-Device-Id", a.DeviceID)
 	}
+	// 设备指纹头（官方客户端 bb() 注入；非必需，但补齐更贴近真实客户端）
+	req.Header.Set("x-device-brand", "Windows")
+	req.Header.Set("x-device-type", "windows")
+	req.Header.Set("x-os-version", "10.0.22631")
+	req.Header.Set("x-app-version", IdeVersion)
 }
 
 func truncate(s string, n int) string {

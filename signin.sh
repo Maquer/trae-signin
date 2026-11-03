@@ -22,6 +22,9 @@ echo "$SIGNIN_OUTPUT"
 TOTAL=$(echo "$SIGNIN_OUTPUT" | grep -oP '总计=\K\d+' || echo "?")
 OK=$(echo "$SIGNIN_OUTPUT" | grep -oP '签到成功=\K\d+' || echo "?")
 ALREADY=$(echo "$SIGNIN_OUTPUT" | grep -oP '已签=\K\d+' || echo "?")
+# 禁用：服务端返回签到活动未开启（enable=false），不计入失败但要显示，否则总数对不上
+DISABLED=$(echo "$SIGNIN_OUTPUT" | grep -oP '禁用=\K\d+' || echo "0")
+DISABLED=${DISABLED:-0}
 FAIL=$(echo "$SIGNIN_OUTPUT" | grep -oP '失败=\K\d+' || echo "?")
 # 未确认：接口返回成功但未真正到账（疑似风控），不计入失败但要提示
 UNCONF=$(echo "$SIGNIN_OUTPUT" | grep -oP '未确认=\K\d+' || echo "0")
@@ -60,7 +63,7 @@ else
     TITLE="❌ TRAE 签到失败"
 fi
 
-BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 未确认${UNCONF} | 设备异常${BUSY} | 失败${FAIL}\n${ACCOUNTS}"
+BODY="总计${TOTAL} | 成功${OK} | 已签${ALREADY} | 禁用${DISABLED} | 未确认${UNCONF} | 设备异常${BUSY} | 失败${FAIL}\n${ACCOUNTS}"
 
 # 发送 Bark 通知
 if [ -n "$BARK_URL" ]; then
